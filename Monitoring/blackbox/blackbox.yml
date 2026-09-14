@@ -1,0 +1,5 @@
+
+modules:
+  kafka_tcp:
+    prober: tcp
+    timeout: 5s

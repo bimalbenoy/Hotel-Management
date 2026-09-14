@@ -1,0 +1,6 @@
+PORT=3060
+DB_SERVER=BimalB-939
+DB_DATABASE=HotelManagementDB
+JWT_SECRET=mySuperSecretKey
+DB_USER=sa
+DB_PASSWORD="BimalBenoy#1234"

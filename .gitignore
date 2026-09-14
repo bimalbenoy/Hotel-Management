@@ -1,0 +1,46 @@
+# Dependencies
+**/node_modules/
+
+# Build and test output
+**/dist/
+**/build/
+**/coverage/
+**/.nyc_output/
+*.tsbuildinfo
+
+# Local configuration and secrets
+**/.env
+**/.env.*
+!.env.example
+!.env.example.*
+*.pem
+*.key
+*.crt
+
+# Logs and runtime files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+**/logs/
+*.pid
+
+# Local uploads, caches, and temporary files
+**/uploads/*
+**/.cache/
+**/.tmp/
+*.tmp
+*.temp
+
+# IDE and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Local test and tool artifacts
+*.jtl
+*.lck

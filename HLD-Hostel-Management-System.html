@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hostel Management System - High-Level Design</title>
+  <style>
+    :root { --ink: #18212b; --muted: #586575; --line: #d8dee6; --accent: #0b6e69; --soft: #eef7f5; --paper: #ffffff; --bg: #edf1f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 "Segoe UI", Calibri, sans-serif; }
+    main { max-width: 980px; margin: 32px auto; background: var(--paper); padding: 58px 72px; box-shadow: 0 8px 28px rgba(24,33,43,.12); }
+    header { border-bottom: 4px solid var(--accent); padding-bottom: 28px; margin-bottom: 28px; }
+    h1 { font-size: 36px; line-height: 1.15; margin: 0 0 8px; letter-spacing: 0; }
+    h2 { color: var(--accent); border-bottom: 1px solid var(--line); padding-bottom: 7px; margin-top: 36px; }
+    h3 { margin-top: 26px; }
+    p { margin: 10px 0; }
+    .subtitle { color: var(--muted); font-size: 19px; }
+    .meta, table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; }
+    th, td { border: 1px solid var(--line); padding: 9px 11px; text-align: left; vertical-align: top; }
+    th { background: var(--soft); font-weight: 650; }
+    code, pre { font-family: Consolas, "Courier New", monospace; }
+    code { background: #f2f4f6; padding: 1px 4px; }
+    pre { background: #f5f7f9; border: 1px solid var(--line); padding: 14px; overflow-x: auto; white-space: pre-wrap; }
+    blockquote { border-left: 4px solid var(--accent); margin: 16px 0; padding: 8px 16px; background: var(--soft); }
+    li { margin: 4px 0; }
+    .print-note { color: var(--muted); font-size: 12px; margin-top: 38px; }
+    @media print { body { background: white; } main { margin: 0; max-width: none; box-shadow: none; padding: 24px; } h2 { break-after: avoid; } table, pre { break-inside: avoid; } }
+    @media (max-width: 700px) { main { margin: 0; padding: 28px 20px; } h1 { font-size: 29px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Hostel Management System</h1>
+      <div class="subtitle">High-Level Design | Version 1.0 | 14 September 2026</div>
+    </header>
+    <p><strong>Document status:</strong> Current implementation and target architecture</p>
+    <h2>Executive Summary</h2>
+    <p>The Hostel Management System is a TypeScript and Node.js microservice platform for users, roles, rooms, bookings, wallet-backed payments, and payment notifications. HTTP APIs handle commands and queries while Kafka carries asynchronous business events.</p>
+    <p>Booking creation uses a transactional outbox so a committed booking remains recoverable if Kafka is unavailable. Payment and notification processing are independently scalable consumers. Prometheus, Grafana, Kafka-Monitor, Redis, and Blackbox Exporter provide the operational foundation.</p>
+    <blockquote><strong>Production readiness focus:</strong> idempotent consumers, atomic wallet debits, outbox row claiming, bounded retries with DLQs, event schema validation, and clear payment-data ownership.</blockquote>
+    <h2>Goals and Non-Goals</h2>
+    <h3>Goals</h3>
+    <ul><li>Provide secure APIs for identity, access control, inventory, and bookings.</li><li>Accept bookings without synchronously waiting for payment or email.</li><li>Preserve committed bookings during temporary Kafka outages.</li><li>Scale payment and notification independently.</li><li>Expose service, Kafka, cache, and business-flow telemetry.</li></ul>
+    <h3>Non-goals</h3>
+    <ul><li>UI or mobile-client design.</li><li>Cloud-provider or Kubernetes manifests.</li><li>Implementation of Kafka or MSSQL themselves.</li><li>An exactly-once processing guarantee.</li></ul>
+    <h2>Component Overview</h2>
+    <table><tr><th>Component</th><th>Responsibility</th><th>Runtime</th></tr>
+      <tr><td>Booking-Service</td><td>Authentication, RBAC, inventory, bookings, outbox, payment-result consumer</td><td>Node.js/TypeScript, :3060</td></tr>
+      <tr><td>Payment-Service</td><td>Wallets, payments, booking-event consumer, payment-result producer</td><td>Node.js/TypeScript, :3061</td></tr>
+      <tr><td>Notification-Service</td><td>Payment-result consumer and SMTP email delivery</td><td>Node.js/TypeScript, :3062</td></tr>
+      <tr><td>Kafka-Monitor</td><td>Consumer-lag metrics for configured topic/group pairs</td><td>Node.js/TypeScript, :3070</td></tr>
+      <tr><td>Platform services</td><td>Kafka, MSSQL, Redis, Prometheus, Grafana, Blackbox Exporter</td><td>Environment-defined / 6379 / 9090 / 3000 / 9115</td></tr>
+    </table>
+    <h2>Core Booking and Payment Flow</h2>
+    <ol><li>Client submits a booking request to Booking-Service.</li><li>Booking-Service validates dates, room availability, user, overlap, and amount.</li><li>One MSSQL transaction writes the booking, room mapping, and pending outbox event.</li><li>The outbox worker publishes <code>booking.created</code>.</li><li>Payment-Service validates the wallet and publishes <code>payment.result</code>.</li><li>Booking-Service changes the booking to <code>CONFIRMED</code> or <code>PAYMENT_FAILED</code>.</li><li>Notification-Service sends the corresponding email.</li></ol>
+    <h2>Event Contracts</h2>
+    <table><tr><th>Topic</th><th>Producer</th><th>Consumers</th><th>Key</th></tr>
+      <tr><td><code>booking.created</code></td><td>Booking-Service outbox</td><td>Payment-Service, <code>payment-group</code></td><td>booking ID</td></tr>
+      <tr><td><code>payment.result</code></td><td>Payment-Service</td><td>Booking-Service, <code>booking-group</code>; Notification-Service, <code>notification-group</code></td><td>booking ID</td></tr>
+    </table>
+    <p>The effective delivery model is <strong>at least once</strong>. Consumers must tolerate redelivery and use <code>bookingId</code> as an idempotency key. Event versioning and schema validation are required before production scale.</p>
+    <h2>Data and Ownership</h2>
+    <table><tr><th>Domain</th><th>Current owner</th><th>Note</th></tr>
+      <tr><td>Users, roles, permissions</td><td>Booking-Service</td><td>Identity and access control</td></tr>
+      <tr><td>Room types and rooms</td><td>Booking-Service</td><td>Inventory and cached room-type reads</td></tr>
+      <tr><td>Bookings and mappings</td><td>Booking-Service</td><td>Booking lifecycle and outbox</td></tr>
+      <tr><td>Wallets</td><td>Payment-Service</td><td>Wallet operations</td></tr>
+      <tr><td>Payments</td><td>Shared/current implementation</td><td>Must be assigned to Payment-Service or formalized as a shared contract</td></tr>
+    </table>
+    <p>Redis uses cache-aside reads with a five-minute TTL for room types. MSSQL remains authoritative. Price-sensitive booking logic should read authoritative pricing within the booking transaction or use versioned pricing.</p>
+    <h2>Reliability and Security</h2>
+    <ul><li>Add idempotent payment and booking-result consumers.</li><li>Make wallet debit and payment transition atomic.</li><li>Claim outbox rows before publishing from multiple workers.</li><li>Bound retries and route poison messages to retry or DLQ topics.</li><li>Protect Payment-Service routes with authentication and authorization.</li><li>Use TLS/SASL for Kafka outside a trusted network.</li><li>Keep secrets out of source control and redact sensitive logs.</li><li>Add audit events for wallet debits, payment transitions, access changes, and cancellations.</li></ul>
+    <h2>Observability and Deployment</h2>
+    <p>Prometheus scrapes Booking-Service, Payment-Service, Notification-Service, Kafka-Monitor, Redis Exporter, and Blackbox Exporter. Grafana presents dashboards for service health, Kafka lag, booking states, payment failures, outbox age, notification delivery, and cache health.</p>
+    <p>The current monitoring Compose stack starts Redis, exporters, Prometheus, and Grafana. Kafka and Node.js services run outside that Compose file. Liveness and readiness should be separate so dependency outages are visible without confusing process health with workload readiness.</p>
+    <h2>Production Roadmap</h2>
+    <ol><li>Remove or feature-flag forced consumer test failures.</li><li>Implement atomic wallet/payment transactions.</li><li>Implement consumer idempotency and outbox row leases.</li><li>Define event schemas, retry limits, DLQs, and replay procedures.</li><li>Clarify payment database ownership.</li><li>Add readiness endpoints, alerts, audit logging, and sensitive-data redaction.</li></ol>
+    <h2>Repository Source Map</h2>
+    <table><tr><th>Concern</th><th>Source</th></tr>
+      <tr><td>Booking app and routes</td><td><code>Booking-Service/src/app.ts</code></td></tr>
+      <tr><td>Booking orchestration</td><td><code>Booking-Service/src/services/booking.service.ts</code></td></tr>
+      <tr><td>Outbox</td><td><code>Booking-Service/src/outbox/</code></td></tr>
+      <tr><td>Kafka integration</td><td><code>Booking-Service/src/kafka/</code>, <code>Payment-Service/src/kafka/</code></td></tr>
+      <tr><td>Monitoring</td><td><code>Monitoring/prometheus/prometheus.yml</code>, <code>Monitoring/docker-compose.yml</code></td></tr>
+    </table>
+    <p class="print-note">Prepared from the current repository implementation. Use the Markdown companion for Confluence import and collaboration.</p>
+  </main>
+</body>
+</html>
